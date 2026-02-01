@@ -21,6 +21,8 @@ import java.util.function.Consumer;
 
 public class HighwayEditor extends JFrame {
     private HighwaysData data;
+    private File currentFile;
+    private boolean saved = false;
     
     // Navigation
     private DefaultListModel<Station> stationListModel = new DefaultListModel<>();
@@ -32,7 +34,7 @@ public class HighwayEditor extends JFrame {
     
     // Map
     private MapPanel mapPanel;
-    
+
     // Editor Logic
     private CardLayout rightCardLayout = new CardLayout();
     private JPanel rightEditorContainer = new JPanel(rightCardLayout);
@@ -88,7 +90,23 @@ public class HighwayEditor extends JFrame {
         setMinimumSize(new Dimension(1000, 750));
         setDefaultCloseOperation(EXIT_ON_CLOSE);
         setLocationRelativeTo(null);
-        
+
+        // --- MENU BAR ---
+        JMenuBar menuBar = new JMenuBar();
+        JMenu file = new JMenu("File");
+        JMenuItem open = new JMenuItem("Open...");
+        JMenuItem save = new JMenuItem("Save");
+        JMenuItem saveAs = new JMenuItem("Save As");
+
+        open.addActionListener(e -> openFile());
+        save.addActionListener(e -> saveFile());
+        saveAs.addActionListener(e -> saveFileAs());
+
+        file.add(open);
+        file.add(save);
+        file.add(saveAs);
+        menuBar.add(file);
+
         // --- LEFT PANEL ---
         JPanel leftPanel = new JPanel(new BorderLayout());
         leftPanel.setBorder(new TitledBorder("Navigation"));
@@ -139,7 +157,7 @@ public class HighwayEditor extends JFrame {
         applyBtn.addActionListener(e -> applyChanges());
         JButton saveBtn = new JButton("Save JSON File");
         saveBtn.setBackground(new Color(144, 238, 144));
-        saveBtn.addActionListener(e -> saveFile());
+        saveBtn.addActionListener(e -> saveFileAs());
         actionPanel.add(applyBtn); actionPanel.add(saveBtn);
         
         JPanel rightWrapper = new JPanel(new BorderLayout());
@@ -151,8 +169,9 @@ public class HighwayEditor extends JFrame {
         leftSplit.setDividerLocation(250);
         JSplitPane mainSplit = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, leftSplit, rightWrapper);
         mainSplit.setDividerLocation(1050);
+        setJMenuBar(menuBar);
         add(mainSplit);
-        
+
         // --- EVENTS ---
         leftTabs.addChangeListener(e -> {
             int idx = leftTabs.getSelectedIndex();
@@ -374,12 +393,14 @@ public class HighwayEditor extends JFrame {
             }
             mapPanel.repaint(); JOptionPane.showMessageDialog(this, "Changes Applied Locally.");
         } catch (Exception e) { e.printStackTrace(); JOptionPane.showMessageDialog(this, "Check inputs."); }
+        setSaved(false);
     }
     
     private void addNewStation() {
         if (data == null) return;
         Station s = new Station(); s.name = "New Station"; s.id = data.stations.stream().mapToInt(st -> st.id).max().orElse(0) + 1;
         s.x = mapPanel.offX; s.z = mapPanel.offZ; s.lines = new HashMap<>(); data.stations.add(s); refreshLists(); stationList.setSelectedValue(s, true);
+        setSaved(false);
     }
     
     private void addNewLine() {
@@ -396,6 +417,7 @@ public class HighwayEditor extends JFrame {
                 refreshLists(); lineList.setSelectedValue(cat + ": " + name, true);
             }
         }
+        setSaved(false);
     }
     
     private void deleteSelected() {
@@ -412,14 +434,22 @@ public class HighwayEditor extends JFrame {
             }
         }
         mapPanel.repaint();
+        setSaved(false);
     }
     
-    private void saveFile() {
+    private void saveFileAs() {
         JFileChooser c = new JFileChooser();
         if (c.showSaveDialog(this) == JFileChooser.APPROVE_OPTION) {
-            File f = c.getSelectedFile(); if (!f.getName().endsWith(".json")) f = new File(f.getAbsolutePath()+".json");
-            try (Writer w = new FileWriter(f)) { new GsonBuilder().setPrettyPrinting().disableHtmlEscaping().create().toJson(data, w); Desktop.getDesktop().open(f.getParentFile()); } catch (Exception e) {}
+            currentFile = c.getSelectedFile(); if (!currentFile.getName().endsWith(".json")) currentFile = new File(currentFile.getAbsolutePath()+".json");
+            try (Writer w = new FileWriter(currentFile)) { new GsonBuilder().setPrettyPrinting().disableHtmlEscaping().create().toJson(data, w); Desktop.getDesktop().open(currentFile.getParentFile()); } catch (IOException e) { throw new RuntimeException(e); }
+            setSaved(true);
         }
+    }
+
+    private void saveFile() {
+        if (currentFile == null) { saveFileAs(); return; }
+        try (Writer w = new FileWriter(currentFile)) { new GsonBuilder().setPrettyPrinting().disableHtmlEscaping().create().toJson(data, w); Desktop.getDesktop().open(currentFile.getParentFile()); } catch (IOException e) { throw new RuntimeException(e); }
+        setSaved(true);
     }
     
     private void setupDragAndDrop() {
@@ -428,10 +458,25 @@ public class HighwayEditor extends JFrame {
                 try {
                     evt.acceptDrop(DnDConstants.ACTION_COPY);
                     java.util.List<File> files = (java.util.List<File>) evt.getTransferable().getTransferData(DataFlavor.javaFileListFlavor);
-                    if (!files.isEmpty()) { data = new Gson().fromJson(new FileReader(files.get(0)), HighwaysData.class); refreshLists(); mapPanel.setData(data); }
-                } catch (Exception ex) { ex.printStackTrace(); }
+                    if (!files.isEmpty()) {
+                        currentFile = files.get(0);
+                        data = new Gson().fromJson(new FileReader(currentFile), HighwaysData.class); refreshLists(); mapPanel.setData(data);
+                    }
+                } catch (Exception e) { throw new RuntimeException(e); }
             }
         });
+        setSaved(true);
+    }
+
+    private void openFile() {
+        JFileChooser c = new JFileChooser();
+        if (c.showOpenDialog(this) == JFileChooser.APPROVE_OPTION) {
+            currentFile = c.getSelectedFile(); if (!currentFile.getName().endsWith(".json")) currentFile = new File(currentFile.getAbsolutePath()+".json");
+            try {
+                data = new Gson().fromJson(new FileReader(currentFile), HighwaysData.class); refreshLists(); mapPanel.setData(data);
+            } catch (IOException e) { throw new RuntimeException(e); }
+        }
+        setSaved(true);
     }
     
     private void refreshLists() {
@@ -470,6 +515,12 @@ public class HighwayEditor extends JFrame {
     
     private double roundTwoDecimals(double d) {
         return Math.round(d * 100.0) / 100.0;
+    }
+
+    private void setSaved(boolean saved) {
+        this.saved = saved;
+        if (currentFile != null) setTitle(currentFile.getName() + (saved ? "" : "*") + " - WorldMC Ice Highway Editor");
+        else setTitle("WorldMC Ice Highway Editor");
     }
     
     class MapPanel extends JPanel {
